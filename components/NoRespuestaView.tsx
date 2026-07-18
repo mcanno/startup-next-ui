@@ -1,3 +1,4 @@
+import { formatHallazgo } from "@/lib/hallazgos";
 import type { NoRespuesta } from "@/lib/types";
 
 const TIPO_LABEL: Record<NoRespuesta["tipo"], string> = {
@@ -23,9 +24,7 @@ export function NoRespuestaView({ noRespuesta }: { noRespuesta: NoRespuesta }) {
           <p className="text-gray-600">Hallazgos de la ontología:</p>
           <ul className="list-disc list-inside">
             {noRespuesta.hallazgos_ontologia.map((h) => (
-              <li key={h.rule_id}>
-                <strong>{h.rule_id}</strong>: {h.hallazgos}
-              </li>
+              <li key={h.rule_id}>{formatHallazgo(h)}</li>
             ))}
           </ul>
         </div>

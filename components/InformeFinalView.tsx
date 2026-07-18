@@ -1,3 +1,4 @@
+import { formatHallazgo } from "@/lib/hallazgos";
 import type { InformeFinal } from "@/lib/types";
 
 // Sección 9: el informe final se centra en dos componentes con propósitos
@@ -37,9 +38,7 @@ export function InformeFinalView({ informeFinal }: { informeFinal: InformeFinal 
           <div className="border border-amber-300 bg-amber-50 rounded p-4">
             <ul className="text-sm text-gray-700 list-disc list-inside space-y-1">
               {informeFinal.consideraciones_metodologicas.map((h) => (
-                <li key={h.rule_id}>
-                  <strong>{h.rule_id}</strong>: {h.hallazgos}
-                </li>
+                <li key={h.rule_id}>{formatHallazgo(h)}</li>
               ))}
             </ul>
           </div>

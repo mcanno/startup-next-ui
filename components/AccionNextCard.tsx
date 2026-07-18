@@ -1,3 +1,4 @@
+import { formatHallazgo } from "@/lib/hallazgos";
 import type { AccionNext } from "@/lib/types";
 
 export function AccionNextCard({ accionNext, cycle, maxCycles }: { accionNext: AccionNext; cycle: number; maxCycles: number }) {
@@ -32,9 +33,7 @@ export function AccionNextCard({ accionNext, cycle, maxCycles }: { accionNext: A
           <p className="text-gray-600">Hallazgos de la ontología:</p>
           <ul className="list-disc list-inside">
             {accionNext.hallazgos_ontologia.map((h) => (
-              <li key={h.rule_id}>
-                <strong>{h.rule_id}</strong>: {h.hallazgos}
-              </li>
+              <li key={h.rule_id}>{formatHallazgo(h)}</li>
             ))}
           </ul>
         </div>
