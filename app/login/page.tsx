@@ -8,7 +8,7 @@ function LoginForm() {
   const [email, setEmail] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState<string | null>(
-    searchParams.get("error") ? "El enlace expiró o no es válido — pedí uno nuevo." : null,
+    searchParams.get("error") ? "El enlace expiró o no es válido — pide uno nuevo." : null,
   );
 
   async function handleSubmit(e: React.FormEvent) {
@@ -23,7 +23,7 @@ function LoginForm() {
       const data = await res.json();
       setMessage(data.message ?? "Si tu email está autorizado, te va a llegar un enlace en unos minutos.");
     } catch {
-      setMessage("Hubo un error de red. Probá de nuevo.");
+      setMessage("Hubo un error de red. Prueba de nuevo.");
     } finally {
       setSubmitting(false);
     }

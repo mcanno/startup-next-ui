@@ -124,7 +124,7 @@ export default function RunStatusPage({ params }: { params: Promise<{ id: string
 
       {run.status === "failed" && (
         <div className="border border-red-300 rounded p-4 text-red-700 text-sm">
-          El run falló. Revisá los logs de startup-next para más detalle.
+          El run falló. Revisa los logs de startup-next para más detalle.
         </div>
       )}
     </main>
