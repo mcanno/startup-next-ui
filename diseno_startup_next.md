@@ -898,6 +898,72 @@ todavía). Razonamiento:
 >    segundo campo. Ya no es un incidente aislado — es un patrón real de
 >    `.withStructuredOutput()` en este proyecto, no una casualidad del
 >    especialista.
+>
+>    **La teoría original era incompleta — refinada con evidencia real**
+>    (bloqueando el 100% de los runs hasta encontrarla): un segundo campo
+>    de nivel superior previene que el **objeto completo** colapse a
+>    string, pero **no protege un campo array-de-objetos específico**
+>    dentro de ese objeto — `recomendaciones` en
+>    `specialistDecisionSchema` seguía serializándose como string
+>    (con `chunk_ids_citados` y todo el contenido anidado adentro) pese
+>    a ya tener `resumen_estrategia` como campo hermano. Capturado con
+>    `includeRaw: true` antes del parseo de Zod, no supuesto. Medido con
+>    32 llamadas reales (mismo prompt/schema/chunks, contenido variado):
+>    **~6% de fallo por llamada**, estocástico (mismo input, resultado
+>    distinto entre corridas) — no ligado a un contenido puntual.
+>    Patrón real: **cualquier campo array-de-objetos complejos tiene
+>    probabilidad no nula de emitirse como JSON-dentro-de-string, con o
+>    sin campos hermanos** — la regla de "dos campos" reduce el riesgo,
+>    no lo elimina.
+>
+>    **Fix**: capa de reparación determinística en
+>    `structuredOutputRetry.ts`, genérica (no específica de
+>    `specialist.ts`), antes de gastar un reintento completo (nueva
+>    llamada a Claude, misma probabilidad de fallar de nuevo): si un
+>    campo esperado como array/objeto llegó como string, intentar
+>    `JSON.parse()` sobre ese campo específico y re-validar contra el
+>    mismo schema — si pasa, se usa sin gastar reintento ni llamada
+>    nueva. Cubre preventivamente también `informeParseDecisionSchema`
+>    (mismo patrón estructural en `opciones`, no había fallado todavía
+>    ahí). Las reparaciones exitosas quedan logueadas de forma
+>    distinguible del camino feliz normal, para poder confirmar con
+>    datos reales de producción (no solo la muestra sintética de 32
+>    llamadas) si la tasa real coincide con el ~6% medido — hay una
+>    tensión estadística abierta y honestamente no resuelta (2/2 fallos
+>    de reintento agotado en las únicas 2 pruebas reales, cuando la
+>    probabilidad esperada con 6%/llamada sería ~0.02% — podría ser
+>    ruido de muestra chica, o que el contexto real de producción tenga
+>    tasa de fallo más alta que el prompt sintético usado para medir).
+>
+>    **Implementado y verificado en 3 niveles, incluyendo un end-to-end
+>    limpio sin ningún bypass manual**: (1) offline contra el caso real
+>    capturado, repara correctamente con log distintivo; (2) 8 llamadas
+>    reales a `runMvpSpecialist` en producción, sin romper nada; (3) run
+>    real por la UI → `approved` en el primer poll → PDF descargado por
+>    la ruta real, con recomendaciones y fuentes reales del corpus — el
+>    camino feliz completo del producto, confirmado de punta a punta por
+>    primera vez sin ningún atajo de base de datos.
+>
+>    **Segundo subtipo de fallo real, distinto e identificado, no
+>    reparado a propósito**: a veces `recomendaciones` llega como string
+>    pero con JSON genuinamente corrupto/mal cerrado (no una estructura
+>    válida mal tipada, sino contenido roto). La reparación intenta
+>    `JSON.parse()`, falla con excepción, y cae al reintento normal — es
+>    la decisión correcta: reconstruir datos corruptos a ciegas habría
+>    podido producir contenido plausible pero falso, en silencio. El fix
+>    reduce la tasa de `failed`, no la elimina al 100%. De paso se
+>    corrigió el logueo de errores (reconstruye el diagnóstico con
+>    `schema.safeParse()` cuando `parsingError` de LangChain viene vacío,
+>    que es justo lo que pasa en este segundo subtipo) — un fallo futuro
+>    ya no necesita un script de debug aparte para diagnosticarse.
+>
+>    Con el logueo de reparaciones ya en producción, queda pendiente de
+>    observación natural (no una tarea a resolver ahora): comparar la
+>    tasa real de reparaciones contra el ~6% sintético medido, y la
+>    frecuencia del segundo subtipo no reparable — esa sería la señal
+>    real de si hace falta ir más profundo (ej. si es específico de
+>    `claude-sonnet-5` a este tamaño de schema, o bajar el máximo de
+>    recomendaciones).
 
 ---
 
@@ -1833,6 +1899,232 @@ nuevo de este lado.
   encontrarse la startup para que la actividad sea coherente — modo base
   o enriquecido, sección 8). La UI debe mostrar estos dos con claridad,
   sin ruido adicional.
+
+> **Especificación de UI (`startup-next-ui`), formalizada aquí tras un
+> gap real de continuidad entre sesiones de Claude Code — no estaba
+> documentada, solo discutida en chat, y una sesión nueva no tenía
+> forma de recuperarla.** El formulario de `/` debe ser **un solo paso,
+> sin pantalla de revisión intermedia**:
+> - Dos campos simultáneamente visibles: texto libre (textarea) y PDF
+>   (input file) — **mutuamente excluyentes**: llenar uno deshabilita
+>   el otro (no radio buttons de "elegir método", no botón "Extraer
+>   opciones" separado).
+> - Sin campo de comentario del asesor (ver arriba).
+> - **Sin campo `startup_id` manual** — eliminado del formulario (ver
+>   subsección de firma criptográfica más abajo: el id real, cuando
+>   existe, viaja dentro del propio PDF firmado, no se pide al usuario).
+> - Texto aclaratorio junto al input de PDF: *"El PDF debe ser el
+>   informe generado por startup-advisor. Si no dispones de uno, usa la
+>   opción de texto libre en su lugar."* — indicación para el usuario,
+>   no una validación técnica (la validación real es la firma).
+> - **Un único botón "Iniciar"**, habilitado cuando el texto tiene
+>   contenido o hay un PDF seleccionado. Al pulsarlo, la secuencia
+>   completa ocurre internamente, sin mostrar ningún paso intermedio al
+>   usuario: `POST /informes/parse` → armar `comentario_asesor` omitido
+>   → `POST /runs` (crear+arrancar, `startup_id` ya resuelto por el
+>   backend) → navegar a `/runs/[id]`. Si `informes/parse` falla, el
+>   error se muestra inline en la misma pantalla, sin navegar a ningún
+>   lado.
+> - Componentes que **no deben existir** en este flujo:
+>   `OpcionesPropuestasView.tsx`, el link "usar otro informe", cualquier
+>   checkbox de `aplica_a`, el botón "Extraer opciones" como paso
+>   separado del de "Iniciar".
+>
+> Si en algún momento el código no refleja esto, es porque quedó
+> pendiente de una sesión anterior sin ejecutar — no es una regresión
+> intencional, hay que implementarlo desde este documento como fuente
+> de verdad, no desde el historial de chat de una sesión que ya no
+> existe.
+
+### Firma criptográfica del PDF: reemplaza el `startup_id` manual (confirmado, cruza a `startup-advisor`)
+
+**Origen de la decisión**: al independizar los módulos, el campo
+`startup_id` manual quedó como el único vestigio de acoplamiento en la
+UI — pedirle al usuario un dato que en la práctica nadie recuerda de
+memoria, solo para activar el modo enriquecido (sección 8). Se reemplaza
+por un mecanismo que **extrae el id automáticamente del propio PDF**,
+cuando ese PDF es genuinamente de `startup-advisor` — sin campo manual,
+sin base de datos compartida entre los dos módulos.
+
+- **Bloque de texto visible al final del PDF** (no metadatos — se
+  evaluó esa vía y se descartó por simplicidad: exige que ambos lados
+  verifiquen soporte real de metadatos personalizados en sus
+  respectivas librerías antes de nada, capa extra de riesgo sin
+  necesidad), con este formato exacto:
+  ```
+  ---
+  startup-next-verification
+  startup_id: <uuid>
+  report_id: <uuid>
+  timestamp: <iso8601>
+  signature: <base64>
+  ```
+- **Firma Ed25519** (módulo `crypto` nativo de Node, sin librería nueva
+  en ningún lado) sobre la cadena canónica
+  `${startupId}|${reportId}|${timestamp}`. `startup-advisor` guarda la
+  clave privada (nunca sale de ese sistema); `startup-next` solo
+  necesita la clave pública (`PDF_SIGNING_PUBLIC_KEY`, no es secreta)
+  para verificar.
+- **En `/informes/parse`**: al procesar un PDF, buscar ese bloque en el
+  texto extraído. Si aparece y la firma verifica con la clave pública →
+  usar ese `startup_id` real, modo enriquecido automático. Si no
+  aparece, o la firma no verifica (PDF ajeno, corrupto, o falsificado a
+  mano) → generar un UUID al azar, modo base — **sin error, sin
+  bloquear nada**, mismo criterio de degradación elegante ya aplicado
+  en todo el resto del sistema (`getPrerequisitos()` ante un 404,
+  `graph().individuals.length` ante una startup sin hechos).
+- **Texto libre nunca tiene id que extraer** — siempre modo base con
+  UUID generado, no hay forma de evitarlo sin pedir un campo manual que
+  ya se descartó.
+- Esto es intencionalmente **verificación de origen real** (nadie sin
+  la clave privada puede fabricar una firma válida), no la heurística
+  blanda ni el marcador de texto simple que se habían evaluado antes
+  como alternativas más débiles — se optó directamente por la opción
+  fuerte porque de todos modos había que tocar el código de exportación
+  de `startup-advisor`.
+
+> **Cruza a otro repositorio** — lado de `startup-advisor`: **implementado
+> y verificado de punta a punta con código de producción real** (no un
+> PDF descartable): claves Ed25519 generadas una sola vez
+> (`scripts/generate-signing-keypair.ts`), firma en
+> `src/lib/pdf-signing.ts`, bloque de verificación en página final
+> dedicada (`src/lib/report-pdf.tsx`). Prueba real: render → extracción
+> con `unpdf` (misma llamada que usa `startup-next`) → regex ancladas →
+> `crypto.verify()` con la clave pública real → `true`.
+>
+> **Hallazgo real durante la implementación**: `@react-pdf/renderer`
+> hifena automáticamente cadenas largas sin espacios cuando no caben en
+> el ancho de página — la firma base64 (88 caracteres) se partía en dos
+> con un `-` inyectado en medio, rompiendo la verificación en el primer
+> intento. Corregido con
+> `Font.registerHyphenationCallback((word) => [word])` (palabras
+> indivisibles) + tamaño de fuente reducido (8pt) para el bloque.
+>
+> **Clave pública real, para `PDF_SIGNING_PUBLIC_KEY` en `startup-next`**:
+> ```
+> -----BEGIN PUBLIC KEY-----
+> MCowBQYDK2VwAyEAPaNh84Y9RGT2Sn48zqAQs4r6ik0phNT9lz3KS/R87RA=
+> -----END PUBLIC KEY-----
+> ```
+>
+> **Corrección al plan original de extracción** (afecta al lado de
+> `startup-next`, todavía pendiente de implementar): `unpdf` colapsa
+> los saltos de línea a espacios — el bloque de 6 líneas llega como una
+> sola línea continua. No usar `texto.split("\n")` esperando cada campo
+> en su propia línea; usar regex ancladas sobre el texto aplanado:
+> ```
+> startup_id:\s*(\S+)
+> report_id:\s*(\S+)
+> timestamp:\s*(\S+)
+> signature:\s*(\S+)
+> ```
+> Seguro porque ninguno de los 4 valores contiene espacios internos.
+> Verificar primero que el marcador `startup-next-verification` aparece
+> en el texto extraído, antes de intentar los 4 regex — evita falsos
+> positivos de un PDF que por casualidad contenga alguna de esas
+> palabras sin ser un bloque real. `report_id` = `reports.id` (el
+> informe en sí, no la entrevista que lo generó).
+
+> **Segundo incidente real de despliegue manual en este proyecto**
+> (el primero fue `ontology-engine`, sección 8 paso 1): el código de la
+> firma existía en `startup-advisor` pero nunca se había commiteado
+> (estaba en la rama `phase-1-ontology-engine`, sin commit) ni
+> desplegado — el último deployment de producción en Vercel era 6 días
+> anterior a que ese código existiera. `startup-advisor`, igual que
+> `startup-next`/`ontology-engine`, tiene despliegue manual sin
+> integración Git↔Vercel — mergear no despliega nada por sí solo.
+> Resuelto: commit de solo los 4 archivos de la firma (dejando afuera
+> cambios sin terminar de otra rama), `vercel --prod`, verificado que el
+> working tree coincide exactamente con el commit desplegado y que ese
+> código exacto produce un PDF válido (marcador, 4 campos,
+> `crypto.verify() → true`). **Limitación conocida y aceptada, no
+> maquillada**: no se confirmó por HTTP real contra la URL de
+> producción (bloqueado por el *handshake* de autenticación de Clerk en
+> modo test, esfuerzo desproporcionado para el riesgo residual) — la
+> confirmación final queda pendiente de la primera descarga real de un
+> usuario desde el navegador.
+>
+> **Dos incidentes idénticos en el mismo proyecto es una señal, no una
+> coincidencia** — vale la pena que cualquier sesión futura que toque
+> despliegues en `startup-advisor`, `startup-next`, u `ontology-engine`
+> verifique el deployment activo (fecha/commit) antes de asumir que un
+> cambio de código ya está en producción, en vez de descubrirlo por un
+> síntoma confuso más adelante.
+
+> **Hallazgo de fiabilidad real en `ontology-engine`, correctamente
+> descartado como relacionado con la migración `is_sequential`/paso 1**:
+> `GET /startups/{id}/graph` falló con `500` en producción
+> (`SSL connection has been closed unexpectedly`) — investigado con
+> evidencia real, no supuesto: el traceback señala un fallo de conexión
+> a nivel `psycopg`, no de query; `load_startup_graph()` no toca la
+> columna `is_sequential` en ningún punto (esa columna solo la lee
+> `load_tbox()`, función distinta, para un endpoint distinto); y la
+> siguiente request al mismo `startup_id` 30 segundos después devolvió
+> `200` — confirma conexión obsoleta en el pool (`autosuspend`/idle
+> timeout de Neon cerrando la conexión del lado servidor, mientras el
+> pool de `ontology-engine`, vivo desde días atrás sin reiniciar,
+> todavía la creía válida), no un bug de datos. **Corregido**:
+> `ConnectionPool(check=ConnectionPool.check_connection)` al crear el
+> pool en el `lifespan` de `main.py` — valida la conexión antes de
+> entregarla, la descarta/recrea si Neon ya la cerró. Sin dependencias
+> nuevas, usa una capacidad ya existente de `psycopg_pool`.
+>
+> **Desplegado y verificado en producción real** (v4,
+> `check=ConnectionPool.check_connection`, commit `47eb443`
+> bundleado con el trabajo del paso 1 que estaba deployado pero nunca
+> commiteado): `GET /health`, `GET /startups/{id}/graph` (7 individuos
+> reales), `GET /concepts/MVP/prerequisitos` — los tres responden `200`
+> contra la URL pública. **No verificado**: el escenario real de
+> inactividad prolongada que originó el bug (llevaría horas
+> reproducirlo a propósito) — queda pendiente de confirmación natural
+> la próxima vez que el servicio esté inactivo un rato largo; si
+> reaparece el mismo error, el fix no fue suficiente y hay que mirar
+> `max_idle`/`reconnect_timeout`.
+
+> **Nota de entorno, no de código**: Avast interceptó TLS en al menos 3
+> builds/deploys distintos de este proyecto (el build de `rag-ingest`
+> contra PyPI, el primer deploy de `ontology-engine` del paso 1, y este)
+> — patrón recurrente, no incidentes aislados. Recomendado: excepción
+> permanente en Avast para Docker Desktop/WSL2 y `flyctl`, en vez de
+> pausar y reactivar manualmente cada vez.
+
+> **Verificación del lado de `startup-next` — implementada y verificada
+> con un PDF real** (no armado a mano, generado por el código de
+> producción real de `startup-advisor` con la clave privada real):
+> `src/lib/pdfVerification.ts` (`resolveStartupIdFromPdfText()`), ambos
+> caminos de `POST /informes/parse` devuelven `startup_id` junto a
+> `opciones_propuestas`. No hizo falta tocar `orchestrator.ts` —
+> `resolveOntologyContext()` ya decide el modo automáticamente según si
+> ese id tiene hechos reales, sin cambios.
+>
+> Casos probados, los tres con evidencia real: (1) PDF real con firma
+> válida → `startup_id` recuperado coincide exactamente con el firmado;
+> (2) bloque alterado (firmado para un id, impreso otro) → no verifica,
+> UUID al azar, sin excepción; (3) PDF real ajeno (un libro del corpus
+> RAG, sin marcador) → UUID al azar, sin excepción. Cualquier fallo
+> (marcador ausente, campo faltante, firma inválida, excepción de
+> `crypto.verify` con datos corruptos) degrada a `crypto.randomUUID()`
+> — nunca lanza error, mismo criterio de degradación elegante de todo
+> el sistema.
+>
+> Con esto, **la pieza de la firma criptográfica queda cerrada por
+> completo, en los tres repositorios** (`startup-advisor`,
+> `startup-next`, `startup-next-ui`). Confirmado en `startup-next-ui`:
+> campo `startup_id` manual eliminado (de paso resolvió el bug del botón
+> "Iniciar" que no se habilitaba, que dependía de ese campo ya
+> inexistente), texto aclaratorio añadido junto al PDF, y **prueba
+> final definitiva**: un PDF real firmado, para un `startup_id` con 7
+> individuos reales ya registrados de sesiones anteriores, activó el
+> modo enriquecido automáticamente — `hallazgos_ontologia` con
+> `R1_hipotesis_sin_experimento` y `R4_startup_sin_fundador` reales, sin
+> ningún campo manual en ningún punto del flujo.
+
+> **Hallazgo aparte, no bloqueante, para investigar en otro momento**:
+> `POST /startups/{id}/individuals` en `ontology-engine` devolvió
+> `500 Internal Server Error` sin detalle al intentar registrar un
+> individuo para un `startup_id` nuevo. No se persiguió (fuera del
+> alcance de este cambio, y había una alternativa con un id ya
+> poblado), pero queda anotado como posible bug real de ese endpoint.
 
 ### Nuevo estado terminal: `peticion_incoherente`
 
