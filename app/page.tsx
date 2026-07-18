@@ -4,47 +4,48 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { AdminLink } from "@/components/AdminLink";
 import { InformeInputForm } from "@/components/InformeInputForm";
-import { OpcionesPropuestasView } from "@/components/OpcionesPropuestasView";
-import type { OpcionPropuesta } from "@/lib/types";
-
-type Paso = "metodo" | "revision";
 
 export default function HomePage() {
   const router = useRouter();
-  const [paso, setPaso] = useState<Paso>("metodo");
-  const [startupId, setStartupId] = useState("");
-  const [opciones, setOpciones] = useState<OpcionPropuesta[]>([]);
+  const [textoLibre, setTextoLibre] = useState("");
+  const [file, setFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const canSubmit = startupId.trim().length > 0 && opciones.length > 0 && !submitting;
-
-  function handleOpciones(nuevasOpciones: OpcionPropuesta[]) {
-    setOpciones(nuevasOpciones);
-    setPaso("revision");
-  }
-
-  function handleUsarOtroInforme() {
-    setOpciones([]);
-    setPaso("metodo");
-  }
+  const canSubmit = (textoLibre.trim().length > 0 || file !== null) && !submitting;
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     setSubmitting(true);
     try {
-      const res = await fetch("/api/runs", {
+      let parseRes: Response;
+      if (file) {
+        const form = new FormData();
+        form.append("file", file);
+        parseRes = await fetch("/api/informes/parse", { method: "POST", body: form });
+      } else {
+        parseRes = await fetch("/api/informes/parse", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ texto_libre: textoLibre }),
+        });
+      }
+      const parseData = await parseRes.json();
+      if (!parseRes.ok) throw new Error(parseData.error ?? `HTTP ${parseRes.status}`);
+
+      const runRes = await fetch("/api/runs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          startup_id: startupId.trim(),
-          opciones_propuestas: opciones,
+          startup_id: parseData.startup_id,
+          opciones_propuestas: parseData.opciones_propuestas,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
-      router.push(`/runs/${data.run_id}`);
+      const runData = await runRes.json();
+      if (!runRes.ok) throw new Error(runData.error ?? `HTTP ${runRes.status}`);
+
+      router.push(`/runs/${runData.run_id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setSubmitting(false);
@@ -58,37 +59,25 @@ export default function HomePage() {
         <AdminLink />
       </div>
 
-      {paso === "metodo" && <InformeInputForm onOpciones={handleOpciones} />}
+      <form onSubmit={handleSubmit} className="space-y-6">
+        <InformeInputForm
+          textoLibre={textoLibre}
+          onTextoLibreChange={setTextoLibre}
+          file={file}
+          onFileChange={setFile}
+          disabled={submitting}
+        />
 
-      {paso === "revision" && (
-        <form onSubmit={handleSubmit} className="space-y-6">
-          <OpcionesPropuestasView opciones={opciones} />
-          <button type="button" onClick={handleUsarOtroInforme} className="text-sm text-gray-600 hover:underline">
-            usar otro informe
-          </button>
+        {error && <p className="text-red-600 text-sm">{error}</p>}
 
-          <div className="space-y-2">
-            <label className="font-medium block">startup_id (UUID)</label>
-            <input
-              type="text"
-              value={startupId}
-              onChange={(e) => setStartupId(e.target.value)}
-              placeholder="e9f55b30-f9a7-47ab-a4e3-41971751a613"
-              className="w-full border border-gray-300 rounded px-2 py-1 font-mono text-sm"
-            />
-          </div>
-
-          {error && <p className="text-red-600 text-sm">{error}</p>}
-
-          <button
-            type="submit"
-            disabled={!canSubmit}
-            className="px-4 py-2 rounded bg-black text-white disabled:opacity-40"
-          >
-            {submitting ? "Iniciando..." : "Iniciar"}
-          </button>
-        </form>
-      )}
+        <button
+          type="submit"
+          disabled={!canSubmit}
+          className="px-4 py-2 rounded bg-black text-white disabled:opacity-40"
+        >
+          {submitting ? "Iniciando..." : "Iniciar"}
+        </button>
+      </form>
     </main>
   );
 }

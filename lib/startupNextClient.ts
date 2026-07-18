@@ -86,7 +86,7 @@ export async function respondToRun(runId: string, respuesta: string): Promise<Ru
   });
 }
 
-type InformeParseResponse = { opciones_propuestas: OpcionPropuesta[] };
+type InformeParseResponse = { opciones_propuestas: OpcionPropuesta[]; startup_id: string };
 
 export async function parseInformePdf(file: Blob, filename: string): Promise<InformeParseResponse> {
   const form = new FormData();
