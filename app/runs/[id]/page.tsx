@@ -84,7 +84,7 @@ export default function RunStatusPage({ params }: { params: Promise<{ id: string
     <main className="max-w-2xl mx-auto p-6 space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Run {run.run_id}</h1>
-        <span className="text-sm px-2 py-1 rounded bg-gray-100 border border-gray-300">{run.status}</span>
+        <span className="text-sm font-bold px-2 py-1 rounded bg-gray-100 text-black border border-gray-300">{run.status}</span>
       </div>
 
       {run.accion_next && (
