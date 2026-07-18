@@ -111,7 +111,18 @@ export default function RunStatusPage({ params }: { params: Promise<{ id: string
         </form>
       )}
 
-      {run.status === "approved" && run.informe_final && <InformeFinalView informeFinal={run.informe_final} />}
+      {run.status === "approved" && run.informe_final && (
+        <>
+          <InformeFinalView informeFinal={run.informe_final} />
+          <a
+            href={`/api/runs/${id}/pdf`}
+            download
+            className="inline-block px-4 py-2 rounded bg-black text-white text-sm"
+          >
+            Descargar informe
+          </a>
+        </>
+      )}
 
       {(run.status === "max_cycles_reached" ||
         run.status === "sin_especialista" ||
